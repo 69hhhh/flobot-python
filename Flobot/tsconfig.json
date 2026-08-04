@@ -1,0 +1,17 @@
+{
+    "extends": "@sindresorhus/tsconfig",
+	"compilerOptions": {
+		"allowJs": true,
+		"strict": false,
+		"removeComments": true,
+		"sourceMap": true,
+		"outDir": "out"
+	},
+	"include": ["**/*.ts"],
+	"exclude": [
+		"node_modules",
+		"out",
+		"**/*.spec.ts"
+	],
+	"$schema": "https://json.schemastore.org/tsconfig"
+}

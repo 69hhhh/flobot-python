@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flobot-python"
+version = "7.0.0"
+description = "Python implementation of the Flobot generals.io bot"
+requires-python = ">=3.11"
+dependencies = [
+    "generals-bots>=2.5,<3",
+]
+
+[project.scripts]
+flobot-python = "flobot.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["flobot*"]
