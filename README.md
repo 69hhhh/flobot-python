@@ -136,6 +136,41 @@ python -m flobot config.json --debug `
   --diagnostics-file .\logs\experiment-websocket.log
 ```
 
+## 战局观察台数据接入
+
+网页不包含机器人策略。运行 `Flobot/start-ui.cmd` 后，本地 Python 服务会提供网页和控制接口；在页面输入 `https://generals.io/games/房间ID` 与私人 `user_id`，服务会启动项目原有的 `FlobotAgent` 加入房间。user_id 只发送到本机 `127.0.0.1`，不会写入配置或浏览器存储。
+
+Python 机器人默认在 `127.0.0.1:8765` 启动本地战况数据服务，并同时提供：
+
+- WebSocket：`ws://127.0.0.1:8765/ws`
+- HTTP polling：`http://127.0.0.1:8765/api/snapshot`
+- 健康检查：`http://127.0.0.1:8765/api/health`
+
+每次收到 Generals.io 的回合更新后，机器人会生成统一战局快照。WebSocket 会立即推送，polling 始终返回最新快照。尚未进入对局时 polling 返回 HTTP 204。
+
+推荐双击一键启动器：
+
+```text
+Flobot/start-ui.cmd
+```
+
+前端位于 `Flobot/frontend`。开发时也可以单独构建：
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+如需关闭数据服务或修改端口：
+
+```powershell
+python -m flobot config.json --no-monitor
+python -m flobot config.json --monitor-port 9000
+```
+
+注意：CLI 的 `--transport websocket|polling` 控制机器人到 Generals.io 的连接；观察台的数据方式在前端页面切换，两者互不影响。
+
 ## 诊断日志
 
 默认日志文件为 `Flobot/flobot-diagnostics.log`。日志文件和 `logs/` 目录均不会提交到 Git。

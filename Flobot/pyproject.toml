@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 flobot-python = "flobot.cli:main"
+flobot-ui = "flobot.web_app:main"
 
 [tool.setuptools.packages.find]
 include = ["flobot*"]

@@ -1,4 +1,11 @@
+import json
+from pathlib import Path
+import socket
+import struct
+import tempfile
 import unittest
+import unittest.mock as mock
+from urllib.request import Request, urlopen
 
 import numpy as np
 from generals.core.observation import Observation
@@ -11,7 +18,9 @@ from flobot.cli import build_parser, normalize_agent_name
 from flobot.constants import Terrain
 from flobot.game_map import GameMap
 from flobot.game_state import GameState
+from flobot.monitor import BattleMonitor
 from flobot.patcher import patch
+from flobot.web_app import BotSessionManager, parse_room_url
 
 
 def replace_all(values: list[int]) -> list[int]:
@@ -175,6 +184,14 @@ class AgentTests(unittest.TestCase):
         arguments = build_parser().parse_args(["config.json", "--transport", "websocket"])
         self.assertEqual(arguments.transport, "websocket")
 
+    def test_cli_accepts_monitor_settings(self) -> None:
+        arguments = build_parser().parse_args(
+            ["config.json", "--monitor-host", "127.0.0.1", "--monitor-port", "9000"]
+        )
+        self.assertEqual(arguments.monitor_host, "127.0.0.1")
+        self.assertEqual(arguments.monitor_port, 9000)
+        self.assertFalse(arguments.no_monitor)
+
     def test_large_map_action_indices_do_not_overflow_int8(self) -> None:
         action = Action(to_pass=False, row=14, col=14, direction=2, to_split=False)
         self.assertEqual(action_to_server_indices(action, width=15), (224, 223, 0))
@@ -187,6 +204,150 @@ class AgentTests(unittest.TestCase):
         self.assertTrue(game_session_lost("old-sid", None, True))
         self.assertTrue(game_session_lost("old-sid", "old-sid", False))
         self.assertFalse(game_session_lost("same-sid", "same-sid", True))
+
+
+class MonitorTests(unittest.TestCase):
+    @staticmethod
+    def _read_exact(connection: socket.socket, length: int) -> bytes:
+        data = bytearray()
+        while len(data) < length:
+            chunk = connection.recv(length - len(data))
+            if not chunk:
+                raise AssertionError("WebSocket connection closed before a complete frame arrived")
+            data.extend(chunk)
+        return bytes(data)
+
+    def _start_monitor_with_snapshot(self) -> tuple[BattleMonitor, dict]:
+        agent = FlobotAgent("Flobot")
+        observation = AgentTests.observation(turn=7)
+        action = agent.act(observation)
+        server_action = action_to_server_indices(action, width=3)
+        monitor = BattleMonitor(port=0)
+        monitor.start()
+        monitor.begin_game("test-replay", "Flobot")
+        snapshot = monitor.publish_turn(agent._bot.game_state, observation, server_action)
+        return monitor, snapshot
+
+    def test_polling_endpoint_returns_latest_snapshot(self) -> None:
+        monitor, expected = self._start_monitor_with_snapshot()
+        try:
+            with urlopen(f"http://127.0.0.1:{monitor.port}/api/snapshot", timeout=2) as response:
+                payload = json.load(response)
+            self.assertEqual(payload["gameId"], "test-replay")
+            self.assertEqual(payload["turn"], expected["turn"])
+            self.assertEqual((payload["width"], payload["height"]), (3, 3))
+            self.assertEqual(len(payload["tiles"]), 9)
+        finally:
+            monitor.stop()
+
+    def test_websocket_endpoint_pushes_snapshot_message(self) -> None:
+        monitor, _expected = self._start_monitor_with_snapshot()
+        connection = socket.create_connection(("127.0.0.1", monitor.port), timeout=2)
+        try:
+            request = (
+                "GET /ws HTTP/1.1\r\n"
+                f"Host: 127.0.0.1:{monitor.port}\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                "Sec-WebSocket-Version: 13\r\n"
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+            )
+            connection.sendall(request.encode("ascii"))
+            response_headers = bytearray()
+            while not response_headers.endswith(b"\r\n\r\n"):
+                response_headers.extend(self._read_exact(connection, 1))
+            self.assertIn(b"101 Switching Protocols", response_headers)
+
+            header = self._read_exact(connection, 2)
+            self.assertEqual(header[0] & 0x0F, 0x1)
+            length = header[1] & 0x7F
+            if length == 126:
+                length = struct.unpack("!H", self._read_exact(connection, 2))[0]
+            elif length == 127:
+                length = struct.unpack("!Q", self._read_exact(connection, 8))[0]
+            message = json.loads(self._read_exact(connection, length).decode("utf-8"))
+            self.assertEqual(message["type"], "snapshot")
+            self.assertEqual(message["payload"]["gameId"], "test-replay")
+        finally:
+            connection.close()
+            monitor.stop()
+
+    def test_static_frontend_and_session_control_are_served_together(self) -> None:
+        class FakeSessionController:
+            def __init__(self) -> None:
+                self.payload = None
+
+            def start_session(self, payload: dict) -> tuple[int, dict]:
+                self.payload = payload
+                return 202, {"state": "starting", "roomId": "room"}
+
+            def stop_session(self) -> tuple[int, dict]:
+                return 200, {"state": "idle", "roomId": None}
+
+            def get_status(self) -> dict:
+                return {"state": "idle", "roomId": None}
+
+        with tempfile.TemporaryDirectory() as directory:
+            static_dir = Path(directory)
+            (static_dir / "index.html").write_text("<h1>Flobot UI</h1>", encoding="utf-8")
+            controller = FakeSessionController()
+            monitor = BattleMonitor(port=0, static_dir=static_dir)
+            monitor.set_session_controller(controller)
+            monitor.start()
+            try:
+                with urlopen(f"http://127.0.0.1:{monitor.port}/", timeout=2) as response:
+                    self.assertIn("Flobot UI", response.read().decode("utf-8"))
+                body = json.dumps(
+                    {
+                        "roomUrl": "https://generals.io/games/room",
+                        "userId": "private-id",
+                    }
+                ).encode("utf-8")
+                request = Request(
+                    f"http://127.0.0.1:{monitor.port}/api/session/start",
+                    data=body,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urlopen(request, timeout=2) as response:
+                    payload = json.load(response)
+                self.assertEqual(payload["state"], "starting")
+                self.assertEqual(controller.payload["userId"], "private-id")
+            finally:
+                monitor.stop()
+
+
+class WebAppTests(unittest.TestCase):
+    def test_room_url_parser_accepts_only_official_rooms(self) -> None:
+        self.assertEqual(
+            parse_room_url("https://generals.io/games/my-room"),
+            ("my-room", True),
+        )
+        self.assertEqual(
+            parse_room_url("https://bot.generals.io/games/bot-room"),
+            ("bot-room", False),
+        )
+        with self.assertRaises(ValueError):
+            parse_room_url("https://example.com/games/stolen")
+
+    def test_web_session_invokes_original_python_agent(self) -> None:
+        monitor = BattleMonitor(port=0)
+        sessions = BotSessionManager(monitor)
+        with mock.patch("flobot.web_app.run_live_agent") as run_agent:
+            status, _payload = sessions.start_session(
+                {
+                    "roomUrl": "https://generals.io/games/my-room",
+                    "userId": "private-user-id",
+                }
+            )
+            self.assertEqual(status, 202)
+            sessions.shutdown()
+        run_agent.assert_called_once()
+        call = run_agent.call_args
+        self.assertIsInstance(call.args[0], FlobotAgent)
+        self.assertEqual(call.kwargs["user_id"], "private-user-id")
+        self.assertEqual(call.kwargs["lobby_id"], "my-room")
+        self.assertNotIn("private-user-id", json.dumps(sessions.get_status()))
 
 
 if __name__ == "__main__":

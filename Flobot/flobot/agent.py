@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 import logging
-from typing import Any
+import threading
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from generals.agents import Agent
@@ -14,6 +15,9 @@ from .bot_types import Move
 from .constants import RUSH_COLLECT_TURNS, Terrain
 from .game_map import GameMap
 from .strategy import pick_strategy
+
+if TYPE_CHECKING:
+    from .monitor import BattleMonitor
 
 LOGGER = logging.getLogger("flobot.diagnostics")
 DIRECTION_NAMES = ("up", "down", "left", "right")
@@ -277,6 +281,8 @@ def run_live_agent(
     game_speed: int | None = None,
     register_username: bool = True,
     transport: str = "auto",
+    monitor: BattleMonitor | None = None,
+    stop_event: threading.Event | None = None,
 ) -> None:
     """Run Flobot using the official generals-bots remote client."""
     from socketio import Client as SocketIOClient
@@ -320,10 +326,17 @@ def run_live_agent(
         def _play_game(self) -> None:
             game_sid = self.sid
             self._game_diagnostic_sid = game_sid
+            if monitor is not None:
+                monitor.begin_game(self.replay_id or lobby_id, self.agent.id)
             LOGGER.info("[network] game-start sid=%s replay=%s", game_sid, self.replay_id)
             while True:
+                if stop_event is not None and stop_event.is_set():
+                    LOGGER.info("[network] stop-requested sid=%s", self.sid)
+                    self.emit("leave_game")
+                    self._status = "off"
+                    return
                 try:
-                    message = self.receive(timeout=10)
+                    message = self.receive(timeout=1 if stop_event is not None else 10)
                 except TimeoutError:
                     if game_session_lost(game_sid, self.sid, self.connected):
                         self._finish_disconnected_game()
@@ -354,6 +367,8 @@ def run_live_agent(
                     )
                     observation = self.game_state.get_observation()
                     action = self._generate_action(observation)
+                    if monitor is not None:
+                        monitor.publish_turn(self.agent._bot.game_state, observation, action)
                     if action:
                         LOGGER.debug("[network] emit=attack payload=%s sid=%s", action, self.sid)
                         self.emit("attack", action)
@@ -365,6 +380,8 @@ def run_live_agent(
                         self.agent.last_turn,
                         self.agent.last_action,
                     )
+                    if monitor is not None:
+                        monitor.finish_game()
                     self._finish_game(event == "game_won")
                     return
                 else:
@@ -408,6 +425,8 @@ def run_live_agent(
                     "server username and continuing."
                 )
         for game_number in range(max(1, number_of_games)):
+            if stop_event is not None and stop_event.is_set():
+                break
             agent.reset()
             client.join_private_lobby(lobby_id)
             if game_speed is not None:

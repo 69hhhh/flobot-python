@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 
 from .agent import FlobotAgent, run_live_agent
+from .monitor import BattleMonitor
 
 
 def normalize_agent_name(name: str, public_server: bool) -> str:
@@ -42,6 +43,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="do not call the remote client's bot registration endpoint",
     )
+    parser.add_argument(
+        "--monitor-host",
+        default="127.0.0.1",
+        help="battle monitor bind address (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--monitor-port",
+        type=int,
+        default=8765,
+        help="battle monitor HTTP/WebSocket port (default: 8765)",
+    )
+    parser.add_argument(
+        "--no-monitor",
+        action="store_true",
+        help="disable the local battle monitor data service",
+    )
     return parser
 
 
@@ -73,6 +90,11 @@ def main() -> None:
             configured_name,
         )
     agent = FlobotAgent(agent_name)
+    monitor = None if args.no_monitor else BattleMonitor(args.monitor_host, args.monitor_port)
+    if monitor is not None:
+        monitor.start()
+        print(f"Battle monitor polling: http://{args.monitor_host}:{monitor.port}/api/snapshot")
+        print(f"Battle monitor WebSocket: ws://{args.monitor_host}:{monitor.port}/ws")
     try:
         run_live_agent(
             agent,
@@ -83,9 +105,13 @@ def main() -> None:
             game_speed=game.get("customGameSpeed"),
             register_username=not args.no_register_username,
             transport=args.transport,
+            monitor=monitor,
         )
     except KeyboardInterrupt:
         logging.getLogger("flobot").info("Interrupted; leaving game")
+    finally:
+        if monitor is not None:
+            monitor.stop()
 
 
 if __name__ == "__main__":
