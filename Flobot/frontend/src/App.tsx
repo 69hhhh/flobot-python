@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ActivityFeed } from './components/ActivityFeed'
 import { BattleBoard } from './components/BattleBoard'
 import { DirectConnectPanel } from './components/DirectConnectPanel'
@@ -90,13 +90,34 @@ function LoadingState({
 export default function App() {
   const [mode, setMode] = useState<DataMode>(readInitialMode)
   const [directConfig, setDirectConfig] = useState<ParsedDirectConnection | null>(null)
+  const [restartState, setRestartState] = useState<'idle' | 'restarting' | 'error'>('idle')
+  const [restartError, setRestartError] = useState('')
   const source = useMemo(() => createGameSource(mode, directConfig), [mode, directConfig])
   const { snapshot, connection } = useGameStream(source)
+
+  useEffect(() => {
+    if (snapshot?.status === 'playing') {
+      setRestartState('idle')
+      setRestartError('')
+    }
+  }, [snapshot?.status, snapshot?.turn])
 
   const changeMode = (nextMode: DataMode) => {
     if (mode === 'direct' || nextMode === 'direct') setDirectConfig(null)
     window.localStorage.setItem('flobot-data-mode', nextMode)
     setMode(nextMode)
+  }
+
+  const restartDirectGame = async () => {
+    if (!source?.restart || restartState === 'restarting') return
+    setRestartState('restarting')
+    setRestartError('')
+    try {
+      await source.restart()
+    } catch (reason) {
+      setRestartState('error')
+      setRestartError(reason instanceof Error ? reason.message : '重新开始失败，请稍后再试')
+    }
   }
 
   if (mode === 'direct' && directConfig === null) {
@@ -123,6 +144,7 @@ export default function App() {
   const observer = snapshot.players.find((player) => player.id === snapshot.observerPlayerId)
   const visibleTiles = snapshot.tiles.filter((tile) => tile.discovered).length
   const visibility = Math.round((visibleTiles / snapshot.tiles.length) * 100)
+  const result = snapshot.result ?? (observer?.alive ? 'victory' : 'defeat')
 
   return (
     <div className="app-shell">
@@ -158,6 +180,30 @@ export default function App() {
             <strong>{formatElapsed(snapshot.elapsedSeconds)}</strong>
           </div>
         </section>
+
+        {snapshot.status === 'finished' && (
+          <section className={`result-banner result-banner--${result}`} aria-live="polite">
+            <div>
+              <span className="eyebrow">对局结束 / GAME OVER</span>
+              <h2>{result === 'victory' ? '胜利' : '失败'}</h2>
+              <p>{result === 'victory' ? 'Flobot 已拿下本局，可以立即加入同一房间再战。' : '本局已经结束，可以立即加入同一房间重新挑战。'}</p>
+              {restartError && <p className="result-banner__error" role="alert">{restartError}</p>}
+            </div>
+            {mode === 'direct' && typeof source?.restart === 'function' && (
+              <div className="result-banner__actions">
+                <button
+                  className="result-banner__restart"
+                  type="button"
+                  disabled={restartState === 'restarting'}
+                  onClick={() => void restartDirectGame()}
+                >
+                  {restartState === 'restarting' ? '正在重新加入…' : '立即再来一局'}
+                </button>
+                <button className="result-banner__change" type="button" onClick={() => setDirectConfig(null)}>更换房间</button>
+              </div>
+            )}
+          </section>
+        )}
 
         <section className="metrics" aria-label="战局摘要">
           <article className="metric metric--primary">

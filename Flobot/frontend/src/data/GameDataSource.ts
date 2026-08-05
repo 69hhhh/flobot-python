@@ -4,6 +4,7 @@ export interface GameDataSource {
   readonly name: string
   connect(): void
   disconnect(): void
+  restart?(): Promise<void>
   subscribe(listener: (snapshot: GameSnapshot) => void): () => void
   subscribeConnection(listener: (state: ConnectionState) => void): () => void
 }

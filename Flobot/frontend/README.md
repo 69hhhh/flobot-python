@@ -40,6 +40,7 @@ powershell -ExecutionPolicy Bypass -File .\start-ui.ps1
 ```text
 React 网页
   ├─ POST /api/session/start  启动原版 FlobotAgent
+  ├─ POST /api/session/restart 安全结束上一局并重新加入
   ├─ POST /api/session/stop   安全停止机器人
   ├─ WS /ws                   接收实时战况
   └─ GET /api/snapshot        polling 获取最新战况

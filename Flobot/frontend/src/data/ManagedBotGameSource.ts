@@ -69,6 +69,26 @@ export class ManagedBotGameSource extends BaseGameDataSource {
     void this.stopSession()
   }
 
+  async restart() {
+    if (!this.active) throw new Error('机器人连接已经关闭')
+    this.emitConnection('connecting')
+    try {
+      const response = await fetch(`${this.apiBase}/api/session/restart`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomUrl: this.config.roomUrl, userId: this.config.userId }),
+      })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { error?: string }
+        throw new Error(payload.error || '无法重新启动机器人')
+      }
+      if (this.active) this.emitConnection('connected')
+    } catch (error) {
+      if (this.active) this.emitConnection('error')
+      throw error
+    }
+  }
+
   private openSocket() {
     const websocketBase = this.apiBase.replace(/^http/, 'ws')
     const socket = new WebSocket(`${websocketBase}/ws`)

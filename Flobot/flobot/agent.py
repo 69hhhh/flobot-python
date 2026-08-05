@@ -381,7 +381,7 @@ def run_live_agent(
                         self.agent.last_action,
                     )
                     if monitor is not None:
-                        monitor.finish_game()
+                        monitor.finish_game(event == "game_won")
                     self._finish_game(event == "game_won")
                     return
                 else:

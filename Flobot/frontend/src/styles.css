@@ -93,6 +93,22 @@ button { color: inherit; }
 .mission-heading__time span { color: var(--muted); font-size: 11px; }
 .mission-heading__time strong { margin-top: 5px; font: 500 26px/1 var(--mono); letter-spacing: 0.06em; }
 
+.result-banner { display: flex; align-items: center; justify-content: space-between; gap: 28px; margin-bottom: 16px; padding: 22px 24px; border: 1px solid var(--line); background: linear-gradient(100deg, rgba(20, 28, 36, 0.98), rgba(13, 18, 24, 0.98)); }
+.result-banner--victory { border-left: 3px solid var(--lime); box-shadow: inset 16px 0 32px rgba(159, 232, 112, 0.035); }
+.result-banner--defeat { border-left: 3px solid #ff5d73; box-shadow: inset 16px 0 32px rgba(255, 93, 115, 0.035); }
+.result-banner h2 { margin: 6px 0 4px; font: 700 28px/1 var(--mono); }
+.result-banner--victory h2 { color: var(--lime); }
+.result-banner--defeat h2 { color: #ff8798; }
+.result-banner p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.result-banner .result-banner__error { margin-top: 8px; color: #ff9aaa; }
+.result-banner__actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.result-banner__actions button { min-height: 42px; padding: 0 16px; cursor: pointer; }
+.result-banner__restart { border: 1px solid rgba(119, 217, 255, 0.52); color: #071018; background: var(--accent); font-weight: 700; }
+.result-banner__restart:hover:not(:disabled) { background: #a2e6ff; }
+.result-banner__restart:disabled { opacity: 0.55; cursor: wait; }
+.result-banner__change { border: 1px solid var(--line); color: #a8b4bf; background: #0b1016; }
+.result-banner__change:hover { border-color: #465563; color: var(--text); }
+
 .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-bottom: 16px; border: 1px solid var(--line); background: var(--line); }
 .metric { min-height: 112px; padding: 20px 24px; display: grid; align-content: center; background: var(--panel); position: relative; overflow: hidden; }
 .metric--primary::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 2px; background: var(--accent); box-shadow: 0 0 18px rgba(119, 217, 255, 0.6); }
@@ -230,6 +246,8 @@ button { color: inherit; }
   .dashboard { width: min(100% - 24px, 1480px); padding-top: 28px; }
   .mission-heading { align-items: end; }
   .mission-heading p { max-width: 220px; }
+  .result-banner { align-items: stretch; flex-direction: column; gap: 18px; padding: 20px; }
+  .result-banner__actions { display: grid; grid-template-columns: 1fr auto; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .metric { min-height: 94px; padding: 15px 16px; }
   .content-grid { gap: 12px; }

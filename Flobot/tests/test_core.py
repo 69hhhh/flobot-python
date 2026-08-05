@@ -3,6 +3,7 @@ from pathlib import Path
 import socket
 import struct
 import tempfile
+import threading
 import unittest
 import unittest.mock as mock
 from urllib.request import Request, urlopen
@@ -240,6 +241,17 @@ class MonitorTests(unittest.TestCase):
         finally:
             monitor.stop()
 
+    def test_finished_snapshot_records_victory_or_defeat(self) -> None:
+        monitor, _expected = self._start_monitor_with_snapshot()
+        try:
+            monitor.finish_game(True)
+            self.assertEqual(monitor.get_snapshot()["status"], "finished")
+            self.assertEqual(monitor.get_snapshot()["result"], "victory")
+            monitor.finish_game(False)
+            self.assertEqual(monitor.get_snapshot()["result"], "defeat")
+        finally:
+            monitor.stop()
+
     def test_websocket_endpoint_pushes_snapshot_message(self) -> None:
         monitor, _expected = self._start_monitor_with_snapshot()
         connection = socket.create_connection(("127.0.0.1", monitor.port), timeout=2)
@@ -276,6 +288,7 @@ class MonitorTests(unittest.TestCase):
         class FakeSessionController:
             def __init__(self) -> None:
                 self.payload = None
+                self.restart_payload = None
 
             def start_session(self, payload: dict) -> tuple[int, dict]:
                 self.payload = payload
@@ -283,6 +296,10 @@ class MonitorTests(unittest.TestCase):
 
             def stop_session(self) -> tuple[int, dict]:
                 return 200, {"state": "idle", "roomId": None}
+
+            def restart_session(self, payload: dict) -> tuple[int, dict]:
+                self.restart_payload = payload
+                return 202, {"state": "starting", "roomId": "room"}
 
             def get_status(self) -> dict:
                 return {"state": "idle", "roomId": None}
@@ -313,6 +330,16 @@ class MonitorTests(unittest.TestCase):
                     payload = json.load(response)
                 self.assertEqual(payload["state"], "starting")
                 self.assertEqual(controller.payload["userId"], "private-id")
+                request = Request(
+                    f"http://127.0.0.1:{monitor.port}/api/session/restart",
+                    data=body,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urlopen(request, timeout=2) as response:
+                    payload = json.load(response)
+                self.assertEqual(payload["state"], "starting")
+                self.assertEqual(controller.restart_payload["userId"], "private-id")
             finally:
                 monitor.stop()
 
@@ -347,6 +374,35 @@ class WebAppTests(unittest.TestCase):
         self.assertIsInstance(call.args[0], FlobotAgent)
         self.assertEqual(call.kwargs["user_id"], "private-user-id")
         self.assertEqual(call.kwargs["lobby_id"], "my-room")
+        self.assertNotIn("private-user-id", json.dumps(sessions.get_status()))
+
+    def test_web_session_can_restart_an_active_game(self) -> None:
+        monitor = BattleMonitor(port=0)
+        sessions = BotSessionManager(monitor)
+        first_started = threading.Event()
+        second_started = threading.Event()
+
+        def wait_for_stop(*_args, **kwargs) -> None:
+            if first_started.is_set():
+                second_started.set()
+            else:
+                first_started.set()
+            kwargs["stop_event"].wait(2)
+
+        connection = {
+            "roomUrl": "https://generals.io/games/my-room",
+            "userId": "private-user-id",
+        }
+        with mock.patch("flobot.web_app.run_live_agent", side_effect=wait_for_stop) as run_agent:
+            status, _payload = sessions.start_session(connection)
+            self.assertEqual(status, 202)
+            self.assertTrue(first_started.wait(1))
+            status, payload = sessions.restart_session(connection)
+            self.assertEqual(status, 202)
+            self.assertIn(payload["state"], {"starting", "running"})
+            self.assertTrue(second_started.wait(1))
+            sessions.shutdown()
+        self.assertEqual(run_agent.call_count, 2)
         self.assertNotIn("private-user-id", json.dumps(sessions.get_status()))
 
 

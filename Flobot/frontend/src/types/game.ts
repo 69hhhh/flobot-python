@@ -36,6 +36,7 @@ export interface GameSnapshot {
   width: number
   height: number
   status: 'waiting' | 'playing' | 'finished'
+  result?: 'victory' | 'defeat'
   elapsedSeconds: number
   observerPlayerId: number
   players: PlayerState[]

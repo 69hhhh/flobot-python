@@ -99,6 +99,35 @@ class BotSessionManager:
                 self._stop_event.set()
             return 202, dict(self._status)
 
+    def restart_session(self, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        """Safely replace the current game with a fresh session using new request data."""
+        room_url = payload.get("roomUrl")
+        user_id = payload.get("userId")
+        if not isinstance(room_url, str) or not isinstance(user_id, str) or not user_id.strip():
+            return 400, {"error": "请填写房间网址和 user_id"}
+        try:
+            parse_room_url(room_url)
+        except ValueError as error:
+            return 400, {"error": str(error)}
+
+        with self._lock:
+            worker = self._thread
+            stop_event = self._stop_event
+            if worker is not None and worker.is_alive():
+                self._status = {
+                    **self._status,
+                    "state": "restarting",
+                    "message": "正在结束上一局并重新加入",
+                }
+                if stop_event is not None:
+                    stop_event.set()
+
+        if worker is not None and worker.is_alive():
+            worker.join(timeout=3)
+        if worker is not None and worker.is_alive():
+            return 409, {"error": "上一局仍在退出，请稍后重试"}
+        return self.start_session(payload)
+
     def get_status(self) -> dict[str, Any]:
         with self._lock:
             return dict(self._status)

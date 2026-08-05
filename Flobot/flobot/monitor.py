@@ -25,6 +25,7 @@ PLAYER_COLORS = ("#4f9cff", "#ff5d73", "#38d39f", "#f4b84a")
 
 class SessionController(Protocol):
     def start_session(self, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]: ...
+    def restart_session(self, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]: ...
     def stop_session(self) -> tuple[int, dict[str, Any]]: ...
     def get_status(self) -> dict[str, Any]: ...
 
@@ -223,6 +224,8 @@ class BattleMonitor:
                 try:
                     if path == "/api/session/start":
                         status, response = monitor.session_controller.start_session(self._read_json())
+                    elif path == "/api/session/restart":
+                        status, response = monitor.session_controller.restart_session(self._read_json())
                     elif path == "/api/session/stop":
                         status, response = monitor.session_controller.stop_session()
                     else:
@@ -424,11 +427,13 @@ class BattleMonitor:
         self.publish_snapshot(snapshot)
         return snapshot
 
-    def finish_game(self) -> None:
+    def finish_game(self, won: bool | None = None) -> None:
         snapshot = self.get_snapshot()
         if snapshot is None:
             return
         snapshot["status"] = "finished"
+        if won is not None:
+            snapshot["result"] = "victory" if won else "defeat"
         snapshot["updatedAt"] = int(time.time() * 1000)
         self.publish_snapshot(snapshot)
 

@@ -5,20 +5,22 @@ $frontendPath = Join-Path $projectPath "frontend"
 
 Set-Location -LiteralPath $frontendPath
 if (-not (Test-Path -LiteralPath (Join-Path $frontendPath "node_modules"))) {
-    Write-Host "首次运行：正在安装前端依赖……"
+    Write-Host "First run: installing frontend dependencies..."
     & npm.cmd install --no-audit --no-fund
 }
 
-Write-Host "正在构建 Flobot 网页……"
+Write-Host "Building the Flobot web UI..."
 & npm.cmd run build
 
 Set-Location -LiteralPath $projectPath
-Write-Host "正在启动原版 Python Flobot 和网页……"
-$pythonExecutable = Get-Command python -ErrorAction SilentlyContinue
-if ($null -eq $pythonExecutable) {
-    $pythonExecutable = Get-Command py -ErrorAction SilentlyContinue
+Write-Host "Starting the original Python Flobot and web UI..."
+if ($null -ne (Get-Command python -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+    python -m flobot.web_app
+    exit $LASTEXITCODE
 }
-if ($null -eq $pythonExecutable) {
-    throw "未找到 Python。请先安装 Python 3.11 或更高版本。"
+if ($null -ne (Get-Command py -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+    py -3 -m flobot.web_app
+    exit $LASTEXITCODE
 }
-& $pythonExecutable.Source -m flobot.web_app
+
+throw "Python was not found. Install Python 3.11 or newer first."
