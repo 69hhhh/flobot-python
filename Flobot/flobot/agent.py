@@ -14,7 +14,7 @@ from generals.core.observation import Observation
 from .bot_types import Move
 from .constants import RUSH_COLLECT_TURNS, Terrain
 from .game_map import GameMap
-from .strategy import pick_strategy
+from .strategy import general_is_threatened, pick_strategy
 
 if TYPE_CHECKING:
     from .monitor import BattleMonitor
@@ -82,6 +82,7 @@ class FlobotAgent(Agent):
         self._bot = _StrategyBot()
         self._discovered: list[bool] = []
         self._shape: tuple[int, int] | None = None
+        self._known_enemy_general = -1
         self.last_turn = -1
         self.last_action = "not-started"
 
@@ -89,6 +90,7 @@ class FlobotAgent(Agent):
         self._bot = _StrategyBot()
         self._discovered = []
         self._shape = None
+        self._known_enemy_general = -1
         self.last_turn = -1
         self.last_action = "reset"
 
@@ -111,6 +113,14 @@ class FlobotAgent(Agent):
             state.own_general,
             state.enemy_general,
         )
+
+        if self._bot.pending_moves and general_is_threatened(self._bot):  # type: ignore[arg-type]
+            LOGGER.debug(
+                "[queue] turn=%d discarded=%d reason=general-threat",
+                state.turn,
+                len(self._bot.pending_moves),
+            )
+            self._bot.clear_moves()
 
         move = self._next_valid_queued_move(state)
         if move is None:
@@ -138,7 +148,7 @@ class FlobotAgent(Agent):
         self.last_action = (
             f"MOVE turn={state.turn} source={move.start}({row},{column}) "
             f"destination={move.end}({end_row},{end_column}) "
-            f"direction={DIRECTION_NAMES[direction]} split=0 "
+            f"direction={DIRECTION_NAMES[direction]} split={int(move.split)} "
             f"source_army={state.armies[move.start]} "
             f"destination_army={state.armies[move.end]} land={int(observation.owned_land_count)}"
         )
@@ -148,7 +158,7 @@ class FlobotAgent(Agent):
             row=row,
             col=column,
             direction=direction,
-            to_split=False,
+            to_split=move.split,
         )
 
     def _next_valid_queued_move(self, state: ObservationState) -> Move | None:
@@ -223,7 +233,19 @@ class FlobotAgent(Agent):
         own_general_indices = np.flatnonzero(general_mask & own_mask)
         enemy_general_indices = np.flatnonzero(general_mask & enemy_mask)
         own_general = int(own_general_indices[0]) if len(own_general_indices) else -1
-        enemy_general = int(enemy_general_indices[0]) if len(enemy_general_indices) else -1
+        if len(enemy_general_indices):
+            self._known_enemy_general = int(enemy_general_indices[0])
+        elif (
+            self._known_enemy_general >= 0
+            and self._known_enemy_general < width * height
+            and not own_mask[self._known_enemy_general]
+        ):
+            # Generals remain strategically relevant after they leave current vision.
+            # Keeping the last confirmed position prevents the bot from dropping a rush.
+            pass
+        else:
+            self._known_enemy_general = -1
+        enemy_general = self._known_enemy_general
 
         own_indices = np.flatnonzero(own_mask)
         enemy_indices = np.flatnonzero(enemy_mask)

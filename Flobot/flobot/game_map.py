@@ -28,7 +28,7 @@ class GameMap:
             Terrain.FOG_OBSTACLE,
             Terrain.OFF_LIMITS,
             Terrain.MOUNTAIN,
-        } and not self.is_city(state, tile)
+        }
 
     @staticmethod
     def is_city(state: GameState, tile: Tile | int) -> bool:
@@ -55,6 +55,11 @@ class GameMap:
 
     def is_adjacent_to_enemy(self, state: GameState, index: int) -> bool:
         return any(self.is_enemy(state, tile.index) for tile in self.adjacent_tiles(state, index))
+
+    def is_adjacent_to_player(self, state: GameState, index: int) -> bool:
+        return any(
+            tile.value == self.player_index for tile in self.adjacent_tiles(state, index)
+        )
 
     @staticmethod
     def moveable_tiles(state: GameState) -> list[int]:

@@ -85,7 +85,9 @@ def a_star(
             if tile.index in closed or not game_map.is_walkable(state, tile):
                 continue
             step_cost = 1
-            if tile.value >= 0 and tile.value != state.player_index:
+            if game_map.is_city(state, tile) and tile.value != state.player_index:
+                step_cost += state.armies[tile.index]
+            elif tile.value >= 0 and tile.value != state.player_index:
                 step_cost += state.armies[tile.index]
             elif tile.value == Terrain.EMPTY:
                 step_cost += 1

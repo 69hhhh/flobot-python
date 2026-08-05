@@ -43,7 +43,7 @@ class Bot:
             return False
         self.queued_moves += 1
         self.last_attacked_index = move.end
-        self.socket.emit("attack", move.start, move.end)
+        self.socket.emit("attack", move.start, move.end, int(move.split))
         self.move_count += 1
         return True
 

@@ -19,6 +19,7 @@ from flobot.cli import build_parser, normalize_agent_name
 from flobot.constants import Terrain
 from flobot.game_map import GameMap
 from flobot.game_state import GameState
+from flobot.heuristics import choose_enemy_target_by_lowest_army
 from flobot.monitor import BattleMonitor
 from flobot.patcher import patch
 from flobot.web_app import BotSessionManager, parse_room_url
@@ -89,6 +90,38 @@ class StateAndMapTests(unittest.TestCase):
         )
         self.assertEqual(GameMap.remaining_armies_after_attack(state, 0, 1), 3)
 
+    def test_known_city_is_walkable_and_pathable(self) -> None:
+        state = GameState(
+            game_update(
+                width=3,
+                height=1,
+                armies=[8, 3, 1],
+                terrain=[0, Terrain.EMPTY, 1],
+                generals=[0, -1],
+            ),
+            0,
+        )
+        state.cities = [1]
+        game_map = GameMap(3, 1, 0)
+        self.assertTrue(game_map.is_walkable(state, 1))
+        self.assertEqual(a_star(state, game_map, 0, [2]), [0, 1, 2])
+
+    def test_enemy_target_falls_back_after_fog_is_fully_explored(self) -> None:
+        state = GameState(
+            game_update(
+                width=4,
+                height=1,
+                armies=[8, 2, 4, 1],
+                terrain=[0, 0, 1, 1],
+                generals=[0, -1],
+                turn=300,
+            ),
+            0,
+        )
+        state.discovered_tiles = [True] * state.size
+        target = choose_enemy_target_by_lowest_army(state, GameMap(4, 1, 0))
+        self.assertEqual(target, 2)
+
 
 class AlgorithmTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -113,13 +146,29 @@ class AlgorithmTests(unittest.TestCase):
         self.assertEqual(path[-1], 8)
         self.assertNotIn(4, path)
 
+    def test_a_star_accounts_for_city_defenders(self) -> None:
+        state = GameState(
+            game_update(
+                width=3,
+                height=2,
+                armies=[20, 50, 1, 0, 0, 0],
+                terrain=[0, Terrain.EMPTY, 1, Terrain.EMPTY, Terrain.EMPTY, Terrain.EMPTY],
+                generals=[0, -1],
+            ),
+            0,
+        )
+        state.cities = [1]
+        path = a_star(state, GameMap(3, 2, 0), 0, [2])
+        self.assertNotIn(1, path)
+        self.assertEqual((path[0], path[-1]), (0, 2))
+
 
 class BotTests(unittest.TestCase):
     def test_move_emits_attack_and_tracks_state(self) -> None:
         socket = FakeSocket()
         bot = Bot(socket, 0, game_update(armies=[5] + [1] * 8, terrain=[0] + [-1] * 8))
         self.assertTrue(bot.move(Move(0, 1)))
-        self.assertEqual(socket.events, [("attack", 0, 1)])
+        self.assertEqual(socket.events, [("attack", 0, 1, 0)])
         self.assertEqual((bot.queued_moves, bot.move_count, bot.last_attacked_index), (1, 1, 1))
 
     def test_invalid_move_is_not_emitted(self) -> None:
@@ -159,6 +208,52 @@ class AgentTests(unittest.TestCase):
             priority=1,
         )
 
+    @staticmethod
+    def line_observation(
+        armies: list[int],
+        owned_indices: set[int],
+        opponent_indices: set[int],
+        *,
+        turn: int,
+        own_general: int = 0,
+        enemy_general: int = -1,
+        city_indices: set[int] | None = None,
+    ) -> Observation:
+        width = len(armies)
+        shape = (1, width)
+        owned = np.zeros(shape, dtype=bool)
+        opponent = np.zeros(shape, dtype=bool)
+        for index in owned_indices:
+            owned[0, index] = True
+        for index in opponent_indices:
+            opponent[0, index] = True
+        neutral = ~(owned | opponent)
+        generals = np.zeros(shape, dtype=bool)
+        generals[0, own_general] = True
+        if enemy_general >= 0:
+            generals[0, enemy_general] = True
+        cities = np.zeros(shape, dtype=bool)
+        for index in city_indices or set():
+            cities[0, index] = True
+        empty = np.zeros(shape, dtype=bool)
+        return Observation(
+            armies=np.asarray([armies], dtype=int),
+            generals=generals,
+            cities=cities,
+            mountains=empty,
+            neutral_cells=neutral,
+            owned_cells=owned,
+            opponent_cells=opponent,
+            fog_cells=empty,
+            structures_in_fog=empty,
+            owned_land_count=len(owned_indices),
+            owned_army_count=sum(armies[index] for index in owned_indices),
+            opponent_land_count=len(opponent_indices),
+            opponent_army_count=sum(armies[index] for index in opponent_indices),
+            timestep=turn,
+            priority=1,
+        )
+
     def test_act_converts_index_move_to_standard_action(self) -> None:
         agent = FlobotAgent()
         agent.act(self.observation())
@@ -174,6 +269,82 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(action.tolist(), [1, 0, 0, 0, 0])
         self.assertIn("PASS turn=1", agent.last_action)
         self.assertIn("land=1", agent.last_action)
+
+    def test_late_game_attacks_after_map_is_fully_explored(self) -> None:
+        agent = FlobotAgent()
+        observation = self.line_observation(
+            [20, 1, 1, 1, 8, 2],
+            {0, 1, 2, 3, 4},
+            {5},
+            turn=251,
+        )
+        action = agent.act(observation)
+        self.assertEqual(action.tolist(), [0, 0, 4, 3, 0])
+
+    def test_visible_threat_causes_general_reinforcement(self) -> None:
+        agent = FlobotAgent()
+        observation = self.line_observation(
+            [8, 10, 20, 0, 0],
+            {0, 1},
+            {2},
+            turn=251,
+        )
+        action = agent.act(observation)
+        self.assertEqual(action.tolist(), [0, 0, 1, 2, 0])
+
+    def test_general_threat_interrupts_queued_offensive_move(self) -> None:
+        agent = FlobotAgent()
+        agent._bot.pending_moves.append(Move(4, 5))
+        observation = self.line_observation(
+            [8, 10, 20, 0, 4, 0],
+            {0, 1, 4},
+            {2},
+            turn=251,
+        )
+        action = agent.act(observation)
+        self.assertEqual(action.tolist(), [0, 0, 1, 2, 0])
+
+    def test_general_uses_split_move_to_keep_a_garrison(self) -> None:
+        agent = FlobotAgent()
+        observation = self.line_observation(
+            [30, 0, 0, 0, 0, 2],
+            {0},
+            {5},
+            turn=251,
+        )
+        action = agent.act(observation)
+        self.assertEqual(action.tolist(), [0, 0, 0, 3, 1])
+
+    def test_affordable_neutral_city_can_be_captured(self) -> None:
+        agent = FlobotAgent()
+        observation = self.line_observation(
+            [12, 3, 0],
+            {0},
+            set(),
+            turn=50,
+            city_indices={1},
+        )
+        action = agent.act(observation)
+        self.assertEqual(action.tolist(), [0, 0, 0, 3, 1])
+
+    def test_enemy_general_position_is_remembered_out_of_view(self) -> None:
+        agent = FlobotAgent()
+        visible = self.line_observation(
+            [20, 1, 1, 1, 1, 5],
+            {0, 1},
+            {5},
+            turn=100,
+            enemy_general=5,
+        )
+        hidden_again = self.line_observation(
+            [21, 1, 1, 1, 1, 5],
+            {0, 1},
+            {5},
+            turn=101,
+        )
+        agent._to_state(visible)
+        state = agent._to_state(hidden_again)
+        self.assertEqual(state.enemy_general, 5)
 
     def test_public_server_removes_legacy_bot_prefix(self) -> None:
         self.assertEqual(normalize_agent_name("[Bot] Flobot", True), "Flobot")
